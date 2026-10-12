@@ -30,5 +30,7 @@ Python 3.12 with jsonschema validates Inventory v1 stock events, strict scalar t
 canonical identities and delta consistency. It returns acknowledgement only after
 the owner effect port confirms the same event. Worker never stores or alters stock.
 Run `python -m pip install -r requirements.txt` then `python -m unittest discover -s tests -v`.
-The unit suite uses a fake owner: no durable inbox, transport, retries or alerts are
-implemented yet. See docs/ADR-EVT-001-owner-confirmed-consumer.md for the boundary.
+The core suite uses a fake owner. Authenticated ASGI transport and its signed
+credential tests are described in docs/ADR-EVT-002-authenticated-transport.md.
+Durable inbox/effects belong to Inventory; Worker deployment, relay retries and
+alerts remain pending. HU-EVT-001 is not closed by the transport unit suite.
