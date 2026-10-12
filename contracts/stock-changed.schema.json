@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "MediStock inventory.stock.changed v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "eventType", "schemaVersion", "sequence", "occurredAt", "traceId", "movementId", "movementType", "lotId", "medicationId", "supplierId", "expiresOn", "quantity", "delta", "onHandQuantity", "entryId", "exitId"],
+  "properties": {
+    "eventId": {"type": "string", "format": "uuid"},
+    "eventType": {"const": "inventory.stock.changed"},
+    "schemaVersion": {"const": 1},
+    "sequence": {"type": "integer", "minimum": 1},
+    "occurredAt": {"type": "string", "format": "date-time"},
+    "traceId": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{1,128}$"},
+    "movementId": {"type": "string", "format": "uuid"},
+    "movementType": {"enum": ["ENTRY", "EXIT"]},
+    "lotId": {"type": "string", "format": "uuid"},
+    "medicationId": {"type": "string", "format": "uuid"},
+    "supplierId": {"type": "string", "format": "uuid"},
+    "expiresOn": {"type": "string", "format": "date"},
+    "quantity": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "delta": {"type": "integer", "minimum": -1000000, "maximum": 1000000, "not": {"const": 0}},
+    "onHandQuantity": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+    "entryId": {"type": ["string", "null"], "format": "uuid"},
+    "exitId": {"type": ["string", "null"], "format": "uuid"}
+  },
+  "allOf": [{
+    "if": {"properties": {"movementType": {"const": "ENTRY"}}},
+    "then": {"properties": {"delta": {"minimum": 1}, "entryId": {"type": "string"}, "exitId": {"type": "null"}}},
+    "else": {"properties": {"delta": {"maximum": -1}, "entryId": {"type": "null"}, "exitId": {"type": "string"}}}
+  }]
+}

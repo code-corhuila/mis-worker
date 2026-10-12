@@ -23,3 +23,12 @@ branch into another: `merge develop -> qa` and `merge qa -> main` do not exist i
 rule.
 
 Full policy: `00-governance/branching-policy.md` in `mis-docs`.
+
+## Stock Event Consumer Core
+
+Python 3.12 with jsonschema validates Inventory v1 stock events, strict scalar types,
+canonical identities and delta consistency. It returns acknowledgement only after
+the owner effect port confirms the same event. Worker never stores or alters stock.
+Run `python -m pip install -r requirements.txt` then `python -m unittest discover -s tests -v`.
+The unit suite uses a fake owner: no durable inbox, transport, retries or alerts are
+implemented yet. See docs/ADR-EVT-001-owner-confirmed-consumer.md for the boundary.
