@@ -32,8 +32,9 @@ the owner effect port confirms the same event. Worker never stores or alters sto
 Run `python -m pip install -r requirements.txt` then `python -m unittest discover -s tests -v`.
 The core suite uses a fake owner. Authenticated ASGI transport and its signed
 credential tests are described in docs/ADR-EVT-002-authenticated-transport.md.
-Durable inbox/effects belong to Inventory; Worker deployment, relay retries and
-alerts remain pending. HU-EVT-001 is not closed by the transport unit suite.
+Durable inbox/effects belong to Inventory. Worker deployment is described below;
+live relay activation and full acceptance remain pending. HU-EVT-001 is not closed
+by the transport unit suite.
 
 ## Private Container
 
@@ -42,3 +43,15 @@ Required configuration and credential mounts are documented in
 docs/ADR-EVT-003-private-worker-deployment.md. With Docker available, run
 `python tests/check_deployment.py` to verify container HTTP using synthetic
 credentials and an owner stub. This does not deploy the live Inventory relay.
+
+## Event-Triggered Expiry Evaluation
+
+WORKER_EXPIRY_ENABLED=false by default; WORKER_EXPIRY_WINDOW_DAYS=30 (integer 1..365).
+When enabled, each valid owner receipt, including applied=false replays, is followed
+by owner HTTP evaluation of that lot before the relay acknowledgement. Worker sends
+only lotId/windowDays, never client balances/dates, and keeps no alert state or SQL.
+Inventory API must include the expiry HTTP increment and all seven DB changesets
+before enabling this flag; no live environment is enabled by this publication.
+See [decision and acceptance](docs/ADR-WRK-001-event-triggered-expiry.md).
+Time-only expiry, historical catch-up, periodic scans, Gateway/front and QA remain
+pending. HU-WRK-001 is not closed. This flag is unrelated to disabled low-stock work.

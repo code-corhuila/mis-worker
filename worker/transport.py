@@ -12,6 +12,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from worker.events import consume, InvalidEvent, InvalidAcknowledgement, unique_object
+from worker.expiry import confirm_evaluation
 
 class AuthenticationError(ValueError):
     pass
@@ -28,11 +29,15 @@ class Settings:
     relay_subject: str
     worker_subject: str
     owner_url: str
+    expiry_enabled: bool = False
+    expiry_window_days: int = 30
 
 def canonical(value):
     return isinstance(value, str) and str(UUID(value)) == value and UUID(value).int != 0
 
 def create_app(settings: Settings, transport=None):
+    if type(settings.expiry_enabled) is not bool or type(settings.expiry_window_days) is not int or not 1 <= settings.expiry_window_days <= 365:
+        raise ValueError("Explicit expiry flag and bounded integer window required")
     for subject in (settings.relay_subject, settings.worker_subject):
         if not canonical(subject):
             raise ValueError("Canonical service subjects required")
@@ -63,14 +68,26 @@ def create_app(settings: Settings, transport=None):
 
     class HttpOwner:
         def apply(self, event):
+            result = self.post("/api/v1/internal/events/stock-changed", dict(event.payload), event.payload["traceId"])
+            if set(result) != {"eventId", "sequence", "applied"}:
+                raise InvalidAcknowledgement("Invalid owner response")
+            return result
+
+        def evaluate(self, event):
+            lot_id = event.payload["lotId"]
+            result = self.post("/api/v1/internal/alerts/expiry/evaluate",
+                {"lotId": lot_id, "windowDays": settings.expiry_window_days}, event.payload["traceId"])
+            confirm_evaluation(result, lot_id, settings.expiry_window_days)
+
+        def post(self, path, payload, trace):
             try:
                 token = settings.token_file.read_text(encoding="ascii").strip()
                 identity = authenticate(token, "mis-api")
                 if identity["service"] != "mis-worker" or identity["sub"] != settings.worker_subject or identity["roles"] != ["INVENTORY"]:
                     raise AuthenticationError("Wrong outgoing identity")
                 with httpx.Client(timeout=5.0, follow_redirects=False, trust_env=False, transport=transport) as client:
-                    with client.stream("POST", settings.owner_url.rstrip("/") + "/api/v1/internal/events/stock-changed",
-                        headers={"Authorization": "Bearer " + token, "X-Correlation-Id": event.payload["traceId"]}, json=dict(event.payload)) as response:
+                    with client.stream("POST", settings.owner_url.rstrip("/") + path,
+                        headers={"Authorization": "Bearer " + token, "X-Correlation-Id": trace}, json=payload) as response:
                         if response.status_code != 200:
                             raise OwnerUnavailable("Owner did not confirm")
                         body = bytearray()
@@ -79,7 +96,7 @@ def create_app(settings: Settings, transport=None):
                             if len(body) > 65536:
                                 raise InvalidAcknowledgement("Owner response too large")
                         result = json.loads(body, object_pairs_hook=unique_object)
-                        if not isinstance(result, dict) or set(result) != {"eventId", "sequence", "applied"}:
+                        if not isinstance(result, dict):
                             raise InvalidAcknowledgement("Invalid owner response")
                         return result
             except (OSError, UnicodeError, AuthenticationError, httpx.HTTPError) as error:
@@ -116,7 +133,8 @@ def create_app(settings: Settings, transport=None):
             if len(body) > 65536:
                 return failure(413, "EVENT_TOO_LARGE", trace)
         try:
-            return await run_in_threadpool(consume, bytes(body), HttpOwner())
+            owner = HttpOwner()
+            return await run_in_threadpool(consume, bytes(body), owner, owner.evaluate if settings.expiry_enabled else None)
         except InvalidEvent:
             return failure(400, "INVALID_EVENT", trace)
         except InvalidAcknowledgement:
@@ -127,6 +145,10 @@ def create_app(settings: Settings, transport=None):
     return app
 
 def from_environment():
+    expiry = os.environ.get("WORKER_EXPIRY_ENABLED", "false")
+    window = os.environ.get("WORKER_EXPIRY_WINDOW_DAYS", "30")
+    if expiry not in ("true", "false") or not window.isascii() or not window.isdecimal() or str(int(window)) != window:
+        raise ValueError("Invalid expiry configuration")
     return create_app(Settings(Path(os.environ["WORKER_PUBLIC_KEY"]), Path(os.environ["WORKER_TOKEN_FILE"]),
         os.environ["WORKER_KEY_ID"], os.environ["WORKER_ENVIRONMENT"], os.environ["RELAY_SERVICE_SUBJECT"],
-        os.environ["WORKER_SERVICE_SUBJECT"], os.environ["INVENTORY_ORIGIN"]))
+        os.environ["WORKER_SERVICE_SUBJECT"], os.environ["INVENTORY_ORIGIN"], expiry == "true", int(window)))

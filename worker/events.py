@@ -55,11 +55,13 @@ def decode(raw: bytes) -> StockEvent:
     except (UnicodeError, json.JSONDecodeError, ValidationError, TypeError, KeyError, ValueError) as error:
         raise InvalidEvent("Invalid stock event") from error
 
-def consume(raw: bytes, owner: InventoryOwner) -> dict:
+def consume(raw: bytes, owner: InventoryOwner, after_confirm=None) -> dict:
     event = decode(raw)
     result = owner.apply(event)
     if not isinstance(result, Mapping) or result.get("eventId") != event.event_id or type(result.get("sequence")) is not int:
         raise InvalidAcknowledgement("Invalid owner acknowledgement")
     if result["sequence"] != event.sequence or type(result.get("applied")) is not bool:
         raise InvalidAcknowledgement("Owner acknowledgement mismatch")
+    if after_confirm is not None:
+        after_confirm(event)
     return {"eventId": event.event_id, "sequence": event.sequence, "accepted": True}

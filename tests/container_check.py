@@ -13,7 +13,8 @@ with httpx.Client(timeout=5, trust_env=False) as client:
         response = send('relay.jwt')
         assert response.status_code == 200 and response.json()['accepted'] is True
         rows = client.get('http://inventory:8080/observations').json()
-        assert len(rows) == 3 and rows[0]['jti'] != rows[-1]['jti']
+        assert len(rows) == 6 and rows[0]['jti'] != rows[-1]['jti']
+        assert rows[-1]['lotId'] == event['lotId']
         print('Renewed Worker token observed over container HTTP.')
     else:
         assert client.get('http://worker:8080/health').status_code == 200
@@ -26,5 +27,6 @@ with httpx.Client(timeout=5, trust_env=False) as client:
             assert response.status_code == 200
             assert response.json() == {'eventId': event['eventId'], 'sequence': event['sequence'], 'accepted': True}
         rows = client.get('http://inventory:8080/observations').json()
-        assert len(rows) == 2 and all(row['trace'] == event['traceId'] for row in rows)
-        print('Signed relay/Worker HTTP and owner receipt verified; owner is a stub.')
+        assert len(rows) == 4 and all(row['trace'] == event['traceId'] for row in rows)
+        assert all(row['lotId'] == event['lotId'] for row in rows[1::2])
+        print('Signed event receipt followed by expiry evaluation verified, including replay; owner is a stub.')
