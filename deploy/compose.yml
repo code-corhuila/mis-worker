@@ -1,0 +1,37 @@
+services:
+  worker:
+    image: ${WORKER_IMAGE:-mis-worker:local}
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    environment:
+      WORKER_PUBLIC_KEY: /run/credentials/public.pem
+      WORKER_TOKEN_FILE: /run/credentials/service.jwt
+      WORKER_KEY_ID: ${WORKER_KEY_ID:?WORKER_KEY_ID required}
+      WORKER_ENVIRONMENT: ${WORKER_ENVIRONMENT:?WORKER_ENVIRONMENT required}
+      RELAY_SERVICE_SUBJECT: ${RELAY_SERVICE_SUBJECT:?RELAY_SERVICE_SUBJECT required}
+      WORKER_SERVICE_SUBJECT: ${WORKER_SERVICE_SUBJECT:?WORKER_SERVICE_SUBJECT required}
+      INVENTORY_ORIGIN: http://inventory:8080
+    volumes:
+      - type: bind
+        source: ${WORKER_CREDENTIALS_PATH:?WORKER_CREDENTIALS_PATH required}
+        target: /run/credentials
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      inventory:
+        condition: service_healthy
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    tmpfs: [/tmp]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    networks: [platform]
+    restart: unless-stopped
+    stop_grace_period: 25s

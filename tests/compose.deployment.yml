@@ -1,0 +1,26 @@
+include:
+  - ../deploy/compose.yml
+services:
+  inventory:
+    image: ${WORKER_IMAGE:?WORKER_IMAGE required}
+    entrypoint: [python, /checks/owner_stub.py]
+    volumes:
+      - ./owner_stub.py:/checks/owner_stub.py:ro
+      - ${WORKER_TEST_FIXTURE:?WORKER_TEST_FIXTURE required}:/fixture:ro
+    networks: [platform]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+  deployment-check:
+    image: ${WORKER_IMAGE:?WORKER_IMAGE required}
+    entrypoint: [python, /checks/container_check.py]
+    volumes:
+      - ./container_check.py:/checks/container_check.py:ro
+      - ${WORKER_TEST_FIXTURE:?WORKER_TEST_FIXTURE required}:/fixture:ro
+    profiles: [test]
+    networks: [platform]
+networks:
+  platform:
+    internal: true

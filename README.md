@@ -34,3 +34,11 @@ The core suite uses a fake owner. Authenticated ASGI transport and its signed
 credential tests are described in docs/ADR-EVT-002-authenticated-transport.md.
 Durable inbox/effects belong to Inventory; Worker deployment, relay retries and
 alerts remain pending. HU-EVT-001 is not closed by the transport unit suite.
+
+## Private Container
+
+deploy/compose.yml adds Worker to the platform with no host port or database.
+Required configuration and credential mounts are documented in
+docs/ADR-EVT-003-private-worker-deployment.md. With Docker available, run
+`python tests/check_deployment.py` to verify container HTTP using synthetic
+credentials and an owner stub. This does not deploy the live Inventory relay.
