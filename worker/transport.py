@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from worker.events import consume, InvalidEvent, InvalidAcknowledgement, unique_object
 from worker.expiry import confirm_evaluation
+from worker.scans import scan_lifespan
 
 class AuthenticationError(ValueError):
     pass
@@ -31,11 +32,18 @@ class Settings:
     owner_url: str
     expiry_enabled: bool = False
     expiry_window_days: int = 30
+    expiry_scan_enabled: bool = False
+    expiry_interval_seconds: int = 900
+    expiry_max_pages: int = 100
 
 def canonical(value):
     return isinstance(value, str) and str(UUID(value)) == value and UUID(value).int != 0
 
 def create_app(settings: Settings, transport=None):
+    if type(settings.expiry_scan_enabled) is not bool or (settings.expiry_scan_enabled and not settings.expiry_enabled):
+        raise ValueError("Periodic scanning requires expiry enabled")
+    for value, lower, upper in ((settings.expiry_interval_seconds,60,86400), (settings.expiry_max_pages,1,1000)):
+        if type(value) is not int or not lower <= value <= upper: raise ValueError("Invalid scan bounds")
     if type(settings.expiry_enabled) is not bool or type(settings.expiry_window_days) is not int or not 1 <= settings.expiry_window_days <= 365:
         raise ValueError("Explicit expiry flag and bounded integer window required")
     for subject in (settings.relay_subject, settings.worker_subject):
@@ -68,25 +76,26 @@ def create_app(settings: Settings, transport=None):
 
     class HttpOwner:
         def apply(self, event):
-            result = self.post("/api/v1/internal/events/stock-changed", dict(event.payload), event.payload["traceId"])
+            result = self.request("POST", "/api/v1/internal/events/stock-changed", dict(event.payload), event.payload["traceId"])
             if set(result) != {"eventId", "sequence", "applied"}:
                 raise InvalidAcknowledgement("Invalid owner response")
             return result
 
         def evaluate(self, event):
-            lot_id = event.payload["lotId"]
-            result = self.post("/api/v1/internal/alerts/expiry/evaluate",
-                {"lotId": lot_id, "windowDays": settings.expiry_window_days}, event.payload["traceId"])
-            confirm_evaluation(result, lot_id, settings.expiry_window_days)
+            self.evaluate_lot(event.payload["lotId"], settings.expiry_window_days, event.payload["traceId"])
 
-        def post(self, path, payload, trace):
+        def evaluate_lot(self, lot_id, window_days, trace):
+            result = self.request("POST", "/api/v1/internal/alerts/expiry/evaluate", {"lotId": lot_id, "windowDays": window_days}, trace)
+            confirm_evaluation(result, lot_id, window_days)
+
+        def request(self, method, path, payload, trace):
             try:
                 token = settings.token_file.read_text(encoding="ascii").strip()
                 identity = authenticate(token, "mis-api")
                 if identity["service"] != "mis-worker" or identity["sub"] != settings.worker_subject or identity["roles"] != ["INVENTORY"]:
                     raise AuthenticationError("Wrong outgoing identity")
                 with httpx.Client(timeout=5.0, follow_redirects=False, trust_env=False, transport=transport) as client:
-                    with client.stream("POST", settings.owner_url.rstrip("/") + path,
+                    with client.stream(method, settings.owner_url.rstrip("/") + path,
                         headers={"Authorization": "Bearer " + token, "X-Correlation-Id": trace}, json=payload) as response:
                         if response.status_code != 200:
                             raise OwnerUnavailable("Owner did not confirm")
@@ -104,14 +113,16 @@ def create_app(settings: Settings, transport=None):
             except ValueError as error:
                 raise InvalidAcknowledgement("Invalid owner response") from error
 
-    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None,
+        lifespan=lambda app: scan_lifespan(app, HttpOwner(), settings.expiry_scan_enabled,
+            settings.expiry_window_days, settings.expiry_interval_seconds, settings.expiry_max_pages))
 
     def failure(status, code, trace):
         return JSONResponse({"error": code, "message": code, "traceId": trace}, status_code=status)
 
     @app.get("/health")
     def health():
-        return {"status": "UP"}
+        return {"status": "UP", "expiryScan": getattr(app.state, "expiry_scan", {"status": "NOT_STARTED"})}
 
     @app.post("/internal/events/stock-changed")
     async def receive(request: Request):
@@ -145,10 +156,15 @@ def create_app(settings: Settings, transport=None):
     return app
 
 def from_environment():
+    scan = os.environ.get("WORKER_EXPIRY_SCAN_ENABLED", "false")
+    interval = os.environ.get("WORKER_EXPIRY_INTERVAL_SECONDS", "900")
+    pages = os.environ.get("WORKER_EXPIRY_MAX_PAGES", "100")
+    if scan not in ("true", "false") or any(not value.isascii() or not value.isdecimal() or str(int(value)) != value for value in (interval,pages)):
+        raise ValueError("Invalid scan configuration")
     expiry = os.environ.get("WORKER_EXPIRY_ENABLED", "false")
     window = os.environ.get("WORKER_EXPIRY_WINDOW_DAYS", "30")
     if expiry not in ("true", "false") or not window.isascii() or not window.isdecimal() or str(int(window)) != window:
         raise ValueError("Invalid expiry configuration")
     return create_app(Settings(Path(os.environ["WORKER_PUBLIC_KEY"]), Path(os.environ["WORKER_TOKEN_FILE"]),
         os.environ["WORKER_KEY_ID"], os.environ["WORKER_ENVIRONMENT"], os.environ["RELAY_SERVICE_SUBJECT"],
-        os.environ["WORKER_SERVICE_SUBJECT"], os.environ["INVENTORY_ORIGIN"], expiry == "true", int(window)))
+        os.environ["WORKER_SERVICE_SUBJECT"], os.environ["INVENTORY_ORIGIN"], expiry == "true", int(window), scan == "true", int(interval), int(pages)))
