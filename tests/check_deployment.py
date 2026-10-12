@@ -39,7 +39,8 @@ with tempfile.TemporaryDirectory(prefix=project+'-') as temporary:
     for file in fixture.rglob('*'):
         if file.is_file(): file.chmod(0o644)
     env = dict(os.environ, WORKER_IMAGE=project, WORKER_TEST_FIXTURE=str(fixture), WORKER_CREDENTIALS_PATH=str(credentials),
-        WORKER_KEY_ID='synthetic-dev', WORKER_ENVIRONMENT='dev', WORKER_SERVICE_SUBJECT=worker, RELAY_SERVICE_SUBJECT=relay)
+        WORKER_KEY_ID='synthetic-dev', WORKER_ENVIRONMENT='dev', WORKER_SERVICE_SUBJECT=worker, RELAY_SERVICE_SUBJECT=relay,
+        WORKER_EXPIRY_ENABLED='true', WORKER_EXPIRY_WINDOW_DAYS='30')
     compose = ['docker', 'compose', '-p', project, '-f', str(root/'tests/compose.deployment.yml')]
     def run(arguments, capture=False):
         return subprocess.run(compose+arguments, env=env, check=True, text=True, capture_output=capture)

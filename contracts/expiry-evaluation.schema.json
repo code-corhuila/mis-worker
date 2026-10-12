@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object", "additionalProperties": false,
+  "required": ["lotId", "alertPresent", "alert"],
+  "properties": {
+    "lotId": {"$ref": "#/$defs/uuid"},
+    "alertPresent": {"type": "boolean"},
+    "alert": {"anyOf": [{"$ref": "#/$defs/alert"}, {"type": "null"}]}
+  },
+  "oneOf": [
+    {"properties": {"alertPresent": {"const": false}, "alert": {"type": "null"}}},
+    {"properties": {"alertPresent": {"const": true}, "alert": {"$ref": "#/$defs/alert"}}}
+  ],
+  "$defs": {
+    "uuid": {"type": "string", "format": "uuid", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"},
+    "alert": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "lotId", "severity", "state", "expiresOn", "onHandQuantity", "evaluatedOn", "windowDays", "evaluatedBy", "firstDetectedAt", "lastEvaluatedAt", "resolvedAt"],
+      "oneOf": [
+        {"properties": {"state": {"const": "OPEN"}, "resolvedAt": {"type": "null"}}},
+        {"properties": {"state": {"const": "RESOLVED"}, "resolvedAt": {"type": "string", "format": "date-time"}}}
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/uuid"}, "lotId": {"$ref": "#/$defs/uuid"},
+        "severity": {"type": "string", "enum": ["EXPIRING", "EXPIRED"]},
+        "state": {"type": "string", "enum": ["OPEN", "RESOLVED"]},
+        "expiresOn": {"type": "string", "format": "date"},
+        "onHandQuantity": {"type": "integer", "minimum": 0, "maximum": 2147483647},
+        "evaluatedOn": {"type": "string", "format": "date"},
+        "windowDays": {"type": "integer", "minimum": 1, "maximum": 365},
+        "evaluatedBy": {"$ref": "#/$defs/uuid"},
+        "firstDetectedAt": {"type": "string", "format": "date-time"},
+        "lastEvaluatedAt": {"type": "string", "format": "date-time"},
+        "resolvedAt": {"type": ["string", "null"], "format": "date-time"}
+      }
+    }
+  }
+}

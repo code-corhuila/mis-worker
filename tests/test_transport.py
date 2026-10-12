@@ -44,6 +44,10 @@ class TransportTest(unittest.TestCase):
 
     def owner(self, request):
         self.calls.append(request)
+        if request.url.path.endswith("/alerts/expiry/evaluate"):
+            if self.expiry_error:
+                raise self.expiry_error
+            return httpx.Response(self.expiry_status, json=self.expiry_response)
         if self.error:
             raise self.error
         if self.raw_response is not None:
@@ -145,6 +149,84 @@ class TransportTest(unittest.TestCase):
             with self.assertRaises(ValueError): create_app(replace(self.settings, **patch))
         self.public.write_text("not-a-public-key", encoding="ascii")
         with self.assertRaises(ValueError): create_app(self.settings)
+
+    def enable_expiry(self):
+        from dataclasses import replace
+        self.expiry_response = {"lotId": EVENT["lotId"], "alertPresent": False, "alert": None}
+        self.expiry_status = 200; self.expiry_error = None
+        self.app = create_app(replace(self.settings, expiry_enabled=True), httpx.MockTransport(self.owner))
+
+    def test_expiry_runs_after_valid_receipt_including_owner_replays(self):
+        self.enable_expiry()
+        for applied in (True, False):
+            self.response["applied"] = applied
+            self.assertEqual(self.post().status_code, 200)
+        self.assertEqual([call.url.path for call in self.calls],
+            ["/api/v1/internal/events/stock-changed", "/api/v1/internal/alerts/expiry/evaluate"]*2)
+        for call in self.calls[1::2]:
+            self.assertEqual(json.loads(call.content), {"lotId": EVENT["lotId"], "windowDays": 30})
+            self.assertEqual(call.headers["X-Correlation-Id"], EVENT["traceId"])
+            identity = jwt.decode(call.headers["Authorization"][7:], self.key.public_key(), algorithms=["RS256"], audience="mis-api")
+            self.assertEqual((identity["service"], identity["sub"], identity["roles"]), ("mis-worker", self.worker, ["INVENTORY"]))
+
+    def test_failed_evaluation_prevents_ack_and_replay_repairs_it(self):
+        self.enable_expiry(); self.expiry_status = 503
+        self.assertEqual(self.post().status_code, 503)
+        self.response["applied"] = False; self.expiry_status = 200
+        self.assertEqual(self.post().json(), {"eventId": ID, "sequence": 1, "accepted": True})
+        self.expiry_error = httpx.ReadTimeout("synthetic evaluation timeout")
+        self.assertEqual(self.post().status_code, 503)
+        self.expiry_error = None
+        for status in (401, 403, 404, 409, 302):
+            self.expiry_status = status
+            self.assertEqual(self.post().status_code, 503)
+
+    def test_invalid_owner_receipt_never_triggers_evaluation(self):
+        self.enable_expiry(); self.response["sequence"] = 2
+        self.assertEqual(self.post().status_code, 502)
+        self.assertEqual(len(self.calls), 1)
+
+    def test_expiry_envelope_and_alert_must_match_owner_contract(self):
+        self.enable_expiry()
+        alert = dict(id=ID, lotId=EVENT["lotId"], severity="EXPIRED", state="OPEN", expiresOn="2026-10-12",
+            onHandQuantity=10, evaluatedOn="2026-10-12", windowDays=30, evaluatedBy=self.worker,
+            firstDetectedAt="2026-10-12T12:00:00Z", lastEvaluatedAt="2026-10-12T12:00:00Z", resolvedAt=None)
+        receipt = dict(lotId=EVENT["lotId"], alertPresent=True, alert=alert)
+        for data in (receipt, dict(receipt, alert=dict(alert, state="RESOLVED", onHandQuantity=0, resolvedAt="2026-10-12T12:00:00Z"))):
+            self.expiry_response = data
+            self.assertEqual(self.post().status_code, 200)
+        for bad in ({}, dict(receipt, lotId=str(uuid4())), dict(receipt, alert=None), dict(receipt, alertPresent=False),
+                    dict(receipt, extra=True), dict(receipt, alert=dict(alert, windowDays=31)),
+                    dict(receipt, alert=dict(alert, lotId=str(uuid4()))), dict(receipt, alert=dict(alert, onHandQuantity=10.0)),
+                    dict(receipt, alert=dict(alert, expiresOn="bad")), dict(receipt, alert=dict(alert, resolvedAt="2026-10-12T12:00:00Z"))):
+            self.expiry_response = bad
+            self.assertEqual(self.post().status_code, 502)
+
+    def test_expiry_configuration_is_bounded_even_when_disabled(self):
+        from dataclasses import replace
+        for patch in (dict(expiry_enabled="true"), dict(expiry_window_days=True), dict(expiry_window_days=0), dict(expiry_window_days=366)):
+            with self.assertRaises(ValueError): create_app(replace(self.settings, **patch))
+
+    def test_environment_rejects_ambiguous_expiry_flag_and_window(self):
+        import os
+        from unittest.mock import patch
+        from worker.transport import from_environment
+        for flag, window in (("TRUE", "30"), ("1", "30"), ("false", "030"), ("true", "30.0"), ("true", "-1")):
+            with patch.dict(os.environ, WORKER_EXPIRY_ENABLED=flag, WORKER_EXPIRY_WINDOW_DAYS=window):
+                with self.assertRaises(ValueError): from_environment()
+
+    def test_evaluation_rereads_token_renewed_after_event_receipt(self):
+        self.enable_expiry(); renewed = self.token("mis-worker")
+        def owner(request):
+            response = self.owner(request)
+            if request.url.path.endswith("/events/stock-changed"):
+                self.token_file.write_text(renewed, encoding="ascii")
+            return response
+        from dataclasses import replace
+        self.app = create_app(replace(self.settings, expiry_enabled=True), httpx.MockTransport(owner))
+        self.assertEqual(self.post().status_code, 200)
+        self.assertNotEqual(self.calls[0].headers["Authorization"], self.calls[1].headers["Authorization"])
+        self.assertEqual(self.calls[1].headers["Authorization"], "Bearer " + renewed)
 
 if __name__ == "__main__":
     unittest.main()

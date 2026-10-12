@@ -17,11 +17,16 @@ class Owner(BaseHTTPRequestHandler):
         self.respond(200, observations if self.path == '/observations' else {'status': 'UP'})
     def do_POST(self):
         try:
-            assert self.path == '/api/v1/internal/events/stock-changed'
+            assert self.path in ('/api/v1/internal/events/stock-changed', '/api/v1/internal/alerts/expiry/evaluate')
             claims = jwt.decode(self.headers['Authorization'][7:], (fixture/'worker/public.pem').read_text(),
                 algorithms=['RS256'], audience='mis-api', issuer='mis-security')
             assert claims['sub'] == identity['worker'] and claims['service'] == 'mis-worker' and claims['roles'] == ['INVENTORY']
             event = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+            if self.path.endswith('/alerts/expiry/evaluate'):
+                assert set(event) == {'lotId', 'windowDays'} and event['windowDays'] == 30
+                observations.append({'lotId': event['lotId'], 'trace': self.headers['X-Correlation-Id'], 'jti': claims['jti']})
+                self.respond(200, {'lotId': event['lotId'], 'alertPresent': False, 'alert': None})
+                return
             observations.append({'eventId': event['eventId'], 'trace': self.headers['X-Correlation-Id'], 'jti': claims['jti']})
             applied = event['eventId'] not in seen
             seen.add(event['eventId'])
