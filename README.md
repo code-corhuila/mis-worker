@@ -53,5 +53,20 @@ only lotId/windowDays, never client balances/dates, and keeps no alert state or 
 Inventory API must include the expiry HTTP increment and all seven DB changesets
 before enabling this flag; no live environment is enabled by this publication.
 See [decision and acceptance](docs/ADR-WRK-001-event-triggered-expiry.md).
-Time-only expiry, historical catch-up, periodic scans, Gateway/front and QA remain
-pending. HU-WRK-001 is not closed. This flag is unrelated to disabled low-stock work.
+Periodic scans are now implemented separately as described below; live activation,
+Gateway/front and QA remain pending. HU-WRK-001 is not closed. This flag is unrelated
+to disabled low-stock work.
+
+## Periodic Expiry Scan
+
+WORKER_EXPIRY_SCAN_ENABLED=false by default and requires WORKER_EXPIRY_ENABLED=true.
+When enabled, ASGI lifespan scans immediately, then waits 900 seconds after each
+attempt (WORKER_EXPIRY_INTERVAL_SECONDS, integer 60..86400). It enumerates owned
+lot IDs through authenticated GET /api/v1/stock, 100 rows per page, evaluating each
+through the existing owner endpoint. This includes old, expired and zero-stock lots.
+WORKER_EXPIRY_MAX_PAGES defaults to 100 (1..1000); hitting the cap marks the attempt
+FAILED, not complete. Increase this bound if the dataset exceeds 10,000 lots.
+Health's expiryScan exposes status, attempts, evaluated count and lastCompletedAt;
+top-level UP is process liveness, not successful alert refresh. No durable scan
+checkpoint or frozen cross-page snapshot is claimed. See
+[decision and acceptance](docs/ADR-WRK-002-periodic-expiry.md).

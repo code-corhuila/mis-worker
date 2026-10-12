@@ -14,6 +14,15 @@ class Owner(BaseHTTPRequestHandler):
         raw = json.dumps(body).encode()
         self.send_response(status); self.send_header('Content-Length', str(len(raw))); self.end_headers(); self.wfile.write(raw)
     def do_GET(self):
+        if self.path.startswith('/api/v1/stock?'):
+            try:
+                claims = jwt.decode(self.headers['Authorization'][7:], (fixture/'worker/public.pem').read_text(),
+                    algorithms=['RS256'], audience='mis-api', issuer='mis-security')
+                assert claims['sub'] == identity['worker'] and claims['service'] == 'mis-worker' and claims['roles'] == ['INVENTORY']
+                lot = json.loads((fixture/'event.json').read_text())['lotId']
+                self.respond(200, {'data': [{'lotId': lot}], 'meta': {'page': 1, 'limit': 100, 'total': 1}})
+            except (AssertionError, ValueError, KeyError, jwt.PyJWTError): self.respond(403, {'error': 'REJECTED'})
+            return
         self.respond(200, observations if self.path == '/observations' else {'status': 'UP'})
     def do_POST(self):
         try:
